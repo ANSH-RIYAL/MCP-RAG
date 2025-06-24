@@ -6,14 +6,18 @@ Demonstrates MCP servers for business data analysis and knowledge retrieval
 
 import asyncio
 import json
-from mcp.client.session import ClientSession
-from mcp.client.stdio import stdio_client
+from mcp import ClientSession, StdioServerParameters, stdio_client
 
 async def demo_business_analytics():
     """Demo the business analytics server."""
     print("=== Business Analytics Server Demo ===\n")
     
-    async with stdio_client(["python", "src/servers/business_analytics_server.py"]) as (read, write):
+    server_params = StdioServerParameters(
+        command="python3",
+        args=["src/servers/business_analytics_server.py"]
+    )
+    
+    async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
             # List available tools
             tools = await session.list_tools()
@@ -60,7 +64,12 @@ async def demo_rag_server():
     """Demo the RAG server."""
     print("=== RAG Server Demo ===\n")
     
-    async with stdio_client(["python", "src/servers/rag_server.py"]) as (read, write):
+    server_params = StdioServerParameters(
+        command="python3",
+        args=["src/servers/rag_server.py"]
+    )
+    
+    async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
             # List available tools
             tools = await session.list_tools()
