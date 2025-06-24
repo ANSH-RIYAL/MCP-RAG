@@ -38,9 +38,19 @@ This project showcases how to build **agentic AI systems** that can:
    pip install -r requirements.txt
    ```
 
-3. **Set up environment variables** (for future LLM integration):
+3. **Set up environment variables**:
+
+   **For Gemini API (default)**:
    ```bash
+   export LLM_MODE="gemini"
    export GEMINI_API_KEY="your-gemini-api-key"
+   ```
+
+   **For Custom Localhost API**:
+   ```bash
+   export LLM_MODE="custom"
+   export CUSTOM_API_URL="http://localhost:8000"
+   export CUSTOM_API_KEY="your-api-key"  # Optional
    ```
 
 ## 🎮 Usage
@@ -57,6 +67,31 @@ This will show:
 - Business analytics tools working with sample data
 - RAG knowledge retrieval for business terms
 - How the systems can work together
+- LLM integration with the selected backend
+
+### LLM Backend Selection
+
+The system supports two LLM backends:
+
+#### Option 1: Google Gemini API (Default)
+```bash
+export LLM_MODE="gemini"
+export GEMINI_API_KEY="your-gemini-api-key"
+python main.py
+```
+
+#### Option 2: Custom Localhost API
+```bash
+export LLM_MODE="custom"
+export CUSTOM_API_URL="http://localhost:8000"
+export CUSTOM_API_KEY="your-api-key"  # Optional
+python main.py
+```
+
+**Custom API Requirements:**
+- Must support OpenAI-compatible chat completions endpoint (`/v1/chat/completions`)
+- Should accept tool/function calling format
+- Expected to run on localhost:8000 (configurable)
 
 ### Conversation Scenarios
 
@@ -228,7 +263,13 @@ MCP-RAG System:
 #### Step 4: Integrate LLM Backend
 **File to create**: `src/servers/llm_server.py` (new file)
 
-1. **Create LLM Server**: Create a new MCP server for LLM integration:
+The system already includes a flexible LLM client (`src/core/llm_client.py`) that supports both Gemini and custom localhost APIs.
+
+1. **Using the Existing LLM Client**: The `FlexibleRAGAgent` in `src/core/gemini_rag_agent.py` already supports:
+   - Google Gemini API
+   - Custom localhost API (OpenAI-compatible format)
+
+2. **Create Custom LLM Server** (optional): If you need a dedicated MCP server for LLM operations:
    ```python
    import asyncio
    from mcp.server import Server
@@ -266,10 +307,11 @@ MCP-RAG System:
            )
    ```
 
-2. **Add to requirements.txt**:
+3. **Add to requirements.txt**:
    ```txt
    openai>=1.0.0
    google-genai>=0.3.0
+   httpx>=0.24.0
    ```
 
 #### Step 5: Add New Data Sources
@@ -298,6 +340,11 @@ MCP-RAG System:
 - `get_business_terms` - Look up business definitions
 - `get_company_policies` - Retrieve policy information
 - `search_business_knowledge` - General knowledge search
+
+**LLM Integration** (`src/core/llm_client.py`):
+- `FlexibleRAGAgent` - Supports both Gemini and custom localhost APIs
+- `LLMClient` - Handles API communication for both backends
+- Tool calling and conversation management
 
 ### Modular Architecture Benefits
 
@@ -379,8 +426,11 @@ MCP-RAG/
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `GEMINI_API_KEY` | Gemini API key for LLM integration | None (future feature) |
+| `LLM_MODE` | LLM backend mode: "gemini" or "custom" | `gemini` |
+| `GEMINI_API_KEY` | Gemini API key for LLM integration | None |
 | `GEMINI_MODEL` | Gemini model name | `gemini-2.0-flash-exp` |
+| `CUSTOM_API_URL` | Custom localhost API URL | `http://localhost:8000` |
+| `CUSTOM_API_KEY` | Custom API key (optional) | None |
 
 ### Sample Data
 

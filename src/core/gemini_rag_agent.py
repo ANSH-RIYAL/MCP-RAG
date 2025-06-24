@@ -6,32 +6,44 @@ from google.genai import types
 from mcp import StdioServerParameters
 
 from .mcp_client import MCPClient
+from .llm_client import LLMClient
 
 
-class GeminiRAGAgent:
+class FlexibleRAGAgent:
     """
-    RAG Agent that combines MCP tools with Google Gemini for document search and Q&A.
+    RAG Agent that combines MCP tools with flexible LLM backend (Gemini or custom localhost API).
     """
 
     def __init__(
         self,
-        gemini_api_key: str = "AIzaSyB-d7vpvd2W8kXyVmfjn7XJNiZmDNP6hHM",
+        mode: str = "gemini",  # "gemini" or "custom"
+        gemini_api_key: str = None,
         gemini_model: str = "gemini-2.0-flash-exp",
+        custom_api_url: str = "http://localhost:8000",
+        custom_api_key: str = None,
         mcp_servers: List[Dict[str, Any]] = None
     ):
         """
-        Initialize Gemini RAG Agent.
+        Initialize Flexible RAG Agent.
         
         Args:
-            gemini_api_key: API key for Google Gemini
+            mode: "gemini" for Google Gemini API, "custom" for localhost API
+            gemini_api_key: API key for Google Gemini (required if mode="gemini")
             gemini_model: Model name to use
+            custom_api_url: URL for custom localhost API (required if mode="custom")
+            custom_api_key: API key for custom API (optional)
             mcp_servers: List of MCP server configurations
         """
-        self.gemini_api_key = gemini_api_key
-        self.gemini_model = gemini_model
+        self.mode = mode
         
-        # Initialize Gemini client
-        self.gemini_client = genai.Client(api_key=gemini_api_key)
+        # Initialize LLM client
+        self.llm_client = LLMClient(
+            mode=mode,
+            gemini_api_key=gemini_api_key,
+            gemini_model=gemini_model,
+            custom_api_url=custom_api_url,
+            custom_api_key=custom_api_key
+        )
         
         # Initialize MCP clients
         self.mcp_clients = []
@@ -62,17 +74,18 @@ class GeminiRAGAgent:
         self.all_tools.update(tools_dict)
 
     async def close(self):
-        """Close all MCP client connections."""
+        """Close all MCP client connections and LLM client."""
         for client in self.mcp_clients:
             await client.__aexit__(None, None, None)
+        await self.llm_client.close()
 
     async def chat(
         self, 
         message: str, 
-        conversation_history: List[types.Content] = None
+        conversation_history: List[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        Chat with the RAG agent using Gemini.
+        Chat with the RAG agent using the selected LLM.
         
         Args:
             message: User message
@@ -84,86 +97,61 @@ class GeminiRAGAgent:
         if conversation_history is None:
             conversation_history = []
 
-        # Convert tools to Gemini function declarations format
-        tool_declarations = []
+        # Convert tools to the format expected by the LLM client
+        tools = []
         for tool in self.all_tools.values():
-            # Convert OpenAI format to Gemini format
-            parsed_parameters = json.loads(
-                json.dumps(tool["schema"]["function"]["parameters"])
-                .replace("object", "OBJECT")
-                .replace("string", "STRING")
-                .replace("number", "NUMBER")
-                .replace("boolean", "BOOLEAN")
-                .replace("array", "ARRAY")
-                .replace("integer", "INTEGER")
-            )
-            declaration = types.FunctionDeclaration(
-                name=tool["name"],
-                description=tool["schema"]["function"]["description"],
-                parameters=parsed_parameters,
-            )
-            tool_declarations.append(declaration)
+            tools.append({
+                "name": tool["name"],
+                "description": tool["schema"]["function"]["description"],
+                "parameters": tool["schema"]["function"]["parameters"]
+            })
 
-        # Create system instruction
-        system_instruction = self._create_system_prompt()
+        # Prepare messages
+        messages = conversation_history.copy()
+        messages.append({"role": "user", "content": message})
 
-        # Initialize generation config
-        generation_config = types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=0.1,
-            tools=[types.Tool(function_declarations=tool_declarations)] if tool_declarations else None,
-        )
-
-        # Prepare conversation
-        contents = conversation_history.copy()
-        contents.append(types.Content(role="user", parts=[types.Part(text=message)]))
-
-        # Generate response
-        response = self.gemini_client.models.generate_content(
-            model=self.gemini_model,
-            config=generation_config,
-            contents=contents,
+        # Generate response using the LLM client
+        result = await self.llm_client.generate_content(
+            messages=messages,
+            tools=tools,
+            temperature=0.1
         )
 
         # Handle tool calls if present
         tool_calls_made = []
-        for part in response.candidates[0].content.parts:
-            contents.append(types.Content(role="model", parts=[part]))
-            
-            if part.function_call:
-                function_call = part.function_call
-                tool_calls_made.append(function_call.name)
+        if result.get("tool_calls"):
+            for tool_call in result["tool_calls"]:
+                tool_name = tool_call["name"]
+                tool_args = tool_call["arguments"]
+                tool_calls_made.append(tool_name)
                 
                 # Call the tool with arguments
-                tool_result = await self.all_tools[function_call.name]["callable"](
-                    **function_call.args
+                tool_result = await self.all_tools[tool_name]["callable"](**tool_args)
+                
+                # Add tool result to conversation
+                messages.append({
+                    "role": "assistant", 
+                    "content": f"I'll use the {tool_name} tool to help answer your question."
+                })
+                messages.append({
+                    "role": "user", 
+                    "content": f"Tool result: {tool_result}"
+                })
+                
+                # Generate follow-up response with tool results
+                follow_up_result = await self.llm_client.generate_content(
+                    messages=messages,
+                    tools=tools,
+                    temperature=0.1
                 )
                 
-                # Build the response parts
-                function_response_part = types.Part.from_function_response(
-                    name=function_call.name,
-                    response={"result": tool_result},
-                )
-                contents.append(types.Content(role="user", parts=[function_response_part]))
-                
-                # Send follow-up with tool results
-                func_gen_response = self.gemini_client.models.generate_content(
-                    model=self.gemini_model, 
-                    config=generation_config, 
-                    contents=contents
-                )
-                contents.append(types.Content(role="model", parts=[func_gen_response.candidates[0].content.parts]))
-
-        # Extract final response text
-        final_response_text = ""
-        for part in contents[-1].parts:
-            if hasattr(part, 'text') and part.text:
-                final_response_text += part.text
+                result = follow_up_result
 
         return {
-            "response": final_response_text,
+            "response": result["response"],
             "tool_calls": tool_calls_made if tool_calls_made else None,
-            "conversation_history": contents
+            "model": result.get("model", "unknown"),
+            "mode": self.mode
         }
 
     async def upload_document(self, file_path: str) -> Dict[str, Any]:
@@ -198,17 +186,15 @@ class GeminiRAGAgent:
                 f"- {name}: {tool['schema']['function']['description']}"
                 for name, tool in self.all_tools.items()
             ])
+        
+        return f"""You are a helpful AI assistant that can use various tools to answer questions and perform tasks.
 
-        return f"""You are a helpful AI assistant with access to document search and retrieval capabilities. You can help users find information in their documents and answer questions based on the content.
+When a user asks a question, you can use the available tools to gather information and provide accurate answers.
 
 {tools_description}
 
-Instructions:
-1. When users ask questions about documents, use the search_documents tool to find relevant information
-2. When users want to upload documents, use the upload_document tool
-3. When users want to see what documents are available, use the list_documents tool
-4. Always provide helpful, accurate responses based on the available information
-5. If you don't have access to the information requested, let the user know
-6. Be conversational and helpful in your responses
+Always be helpful, accurate, and use the available tools when they would be useful to answer the user's question."""
 
-Remember to use the appropriate tools when needed to provide the best possible assistance.""" 
+
+# Keep the old class name for backward compatibility
+GeminiRAGAgent = FlexibleRAGAgent 

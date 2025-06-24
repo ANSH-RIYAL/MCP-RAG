@@ -6,7 +6,14 @@ Demonstrates MCP servers for business data analysis and knowledge retrieval
 
 import asyncio
 import json
+import os
 from mcp import ClientSession, StdioServerParameters, stdio_client
+
+# LLM Configuration
+LLM_MODE = os.getenv("LLM_MODE", "gemini")  # "gemini" or "custom"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+CUSTOM_API_URL = os.getenv("CUSTOM_API_URL", "http://localhost:8000")
+CUSTOM_API_KEY = os.getenv("CUSTOM_API_KEY")
 
 async def demo_business_analytics():
     """Demo the business analytics server."""
@@ -96,15 +103,77 @@ async def demo_rag_server():
             print(result.content[0].text)
             print()
 
+async def demo_llm_integration():
+    """Demo LLM integration with MCP tools."""
+    print("=== LLM Integration Demo ===\n")
+    
+    # Check LLM configuration
+    print(f"LLM Mode: {LLM_MODE}")
+    if LLM_MODE == "gemini":
+        if not GEMINI_API_KEY:
+            print("⚠️  GEMINI_API_KEY not set. Skipping LLM demo.")
+            return
+        print(f"Using Gemini API with model: gemini-2.0-flash-exp")
+    elif LLM_MODE == "custom":
+        print(f"Using Custom API at: {CUSTOM_API_URL}")
+    print()
+    
+    try:
+        from src.core.gemini_rag_agent import FlexibleRAGAgent
+        
+        # Configure MCP servers
+        mcp_servers = [
+            {
+                "command": "python3",
+                "args": ["src/servers/business_analytics_server.py"]
+            },
+            {
+                "command": "python3", 
+                "args": ["src/servers/rag_server.py"]
+            }
+        ]
+        
+        # Initialize RAG agent
+        agent = FlexibleRAGAgent(
+            mode=LLM_MODE,
+            gemini_api_key=GEMINI_API_KEY,
+            custom_api_url=CUSTOM_API_URL,
+            custom_api_key=CUSTOM_API_KEY,
+            mcp_servers=mcp_servers
+        )
+        
+        await agent.initialize()
+        
+        # Demo conversation
+        print("Demo conversation:")
+        print("User: 'What's the average earnings from Q1 and what does earnings mean?'")
+        
+        response = await agent.chat("What's the average earnings from Q1 and what does earnings mean?")
+        
+        print(f"Agent ({response['mode']} mode): {response['response']}")
+        if response.get('tool_calls'):
+            print(f"Tools used: {response['tool_calls']}")
+        
+        await agent.close()
+        
+    except ImportError:
+        print("⚠️  LLM integration not available. Install required dependencies.")
+    except Exception as e:
+        print(f"⚠️  LLM demo failed: {e}")
+
 async def main():
-    """Run both demos."""
+    """Run the demos."""
     print("MCP Business Analytics + RAG Demo")
+    print("=" * 50)
+    print(f"LLM Mode: {LLM_MODE}")
     print("=" * 50)
     
     try:
         await demo_business_analytics()
         print("\n" + "=" * 50 + "\n")
         await demo_rag_server()
+        print("\n" + "=" * 50 + "\n")
+        await demo_llm_integration()
         
         print("\n" + "=" * 50)
         print("Demo completed successfully!")
@@ -113,6 +182,14 @@ async def main():
         print("- 'What's the correlation between sales and expenses?'")
         print("- 'What does profit margin mean?'")
         print("- 'What are the budget allocation policies?'")
+        
+        print(f"\nLLM Configuration:")
+        print(f"- Mode: {LLM_MODE}")
+        if LLM_MODE == "gemini":
+            print(f"- API Key: {'Set' if GEMINI_API_KEY else 'Not set'}")
+        elif LLM_MODE == "custom":
+            print(f"- API URL: {CUSTOM_API_URL}")
+            print(f"- API Key: {'Set' if CUSTOM_API_KEY else 'Not set'}")
         
     except Exception as e:
         print(f"Error during demo: {e}")
